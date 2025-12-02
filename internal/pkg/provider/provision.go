@@ -134,33 +134,30 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			pctx.State.TypedSpec().Value.VolumeId = isoName
 
-			node, err := p.proxmoxClient.Node(ctx, pctx.State.TypedSpec().Value.Node)
+			nodeName := pctx.State.TypedSpec().Value.Node
+
+			storageName, err := p.findISOStorageName(ctx, nodeName)
+			if err != nil {
+				return fmt.Errorf("failed to find ISO storage: %w", err)
+			}
+
+			exists, err := p.storageHasISO(ctx, nodeName, storageName, isoName)
 			if err != nil {
 				return err
 			}
 
-			var storage *proxmox.Storage
-
-			storage, err = node.StorageISO(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to get storage: %w", err)
-			}
-
-			_, err = storage.ISO(ctx, isoName)
-			// Already downloaded
-			// TODO: figure out a better way to check the errors
-			if err == nil {
+			if exists {
 				return nil
 			}
 
-			task, err := storage.DownloadURL(ctx, "iso", isoName, url.String())
+			upid, err := p.startStorageDownload(ctx, nodeName, storageName, isoName, url.String())
 			if err != nil {
 				return err
 			}
 
-			logger.Info("uploading new ISO image", zap.String("volumeID", isoName), zap.String("task", string(task.UPID)))
+			logger.Info("uploading new ISO image", zap.String("volumeID", isoName), zap.String("task", upid))
 
-			pctx.State.TypedSpec().Value.VolumeUploadTask = string(task.UPID)
+			pctx.State.TypedSpec().Value.VolumeUploadTask = upid
 
 			return provision.NewRetryInterval(time.Second)
 		}),
